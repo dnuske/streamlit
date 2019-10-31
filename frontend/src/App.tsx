@@ -182,6 +182,20 @@ class App extends PureComponent<Props, State> {
     }
 
     MetricsManager.current.enqueue("viewReport")
+
+    document.addEventListener("report_status", (e: any) => {
+      console.log(" --event-- ", e.detail)
+    })
+  }
+
+  componentDidUpdate(prevProps: Props, prevState: State) {
+    const reportStatusEvent = new CustomEvent("report_status", {
+      detail: {
+        reportRunState: this.state.reportRunState,
+        connectionState: this.state.connectionState,
+      },
+    })
+    document.dispatchEvent(reportStatusEvent)
   }
 
   /**
