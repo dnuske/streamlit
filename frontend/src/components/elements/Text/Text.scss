@@ -47,10 +47,10 @@
       padding: 6px 13px;
       border: 1px solid $gray-lighter;
     }
-  }
 
-  .markdown-text-container table tr:nth-child(2n) {
-    background: $gray-faint;
+    text-container table tr:nth-child(2n) {
+      background: $gray-faint;
+    }
   }
 
   pre.error {
@@ -67,14 +67,22 @@
   }
 
   .alert {
-    margin: 0;
+    .markdown-text-container {
+      margin: 0;
 
-    code {
-      color: inherit;
+      & :last-child {
+        margin-bottom: 0;
+      }
     }
 
+    code,
     pre {
-      background: transparent;
+      background: $white-a50;
+
+      code,
+      pre {
+        background: none;
+      }
     }
 
     a {

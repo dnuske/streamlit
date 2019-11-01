@@ -17,4 +17,4 @@
 
 import streamlit as st
 
-st.text("complete!")
+st.text(u"complete! 👨‍🎤")

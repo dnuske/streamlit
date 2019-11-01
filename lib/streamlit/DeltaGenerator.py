@@ -18,12 +18,14 @@
 # Python 2/3 compatibility
 from __future__ import print_function, division, unicode_literals, absolute_import
 from streamlit.compatibility import setup_2_3_shims
+from streamlit.errors import DuplicateWidgetID
 
 setup_2_3_shims(globals())
 
 import functools
 import json
 import random
+import re
 import textwrap
 import pandas as pd
 from datetime import datetime
@@ -123,7 +125,36 @@ def _with_element(method):
     return wrapped_method
 
 
-def _set_widget_id(widget_type, element):
+def _build_duplicate_widget_message(widget_type, user_key=None):
+    if user_key is not None:
+        message = textwrap.dedent(
+            """
+            There are multiple identical st.{widget_type} widgets that use the
+             '{user_key}' key.
+
+            To fix this, please make sure that the 'key' argument is unique for
+            each st.{widget_type} you create.
+            """
+        )
+    else:
+        message = textwrap.dedent(
+            """
+            There are multiple identical st.{widget_type} widgets with the
+            same generated key.
+
+            (When a widget is created, it's assigned an internal key based on
+            its structure. Multiple widgets with an identical structure will
+            result in the same internal key, which causes this error.)
+
+            To fix this, please pass a unique 'key' argument to
+            st.{widget_type}().
+            """
+        )
+
+    return message.strip("\n").format(widget_type=widget_type, user_key=user_key)
+
+
+def _set_widget_id(widget_type, element, user_key=None):
     """Set the widget id.
 
     Parameters
@@ -132,14 +163,29 @@ def _set_widget_id(widget_type, element):
         The type of the widget as stored in proto.
     element : proto
         The proto of the element
+    user_key : str
+        Optional user-specified key to use for the widget ID.
+        If this is None, we'll generate an ID by hashing the element.
 
     """
-    widget_id = "%s" % hash(element.SerializeToString())
+    element_hash = hash(element.SerializeToString())
+    if user_key is not None:
+        widget_id = "%s-%s" % (user_key, element_hash)
+    else:
+        widget_id = "%s" % element_hash
+
+    ctx = get_report_ctx()
+    if ctx is not None:
+        added = ctx.widget_ids_this_run.add(widget_id)
+        if not added:
+            raise DuplicateWidgetID(
+                _build_duplicate_widget_message(widget_type, user_key)
+            )
     el = getattr(element, widget_type)
     el.id = widget_id
 
 
-def _get_widget_ui_value(widget_type, element):
+def _get_widget_ui_value(widget_type, element, user_key=None):
     """Get the widget ui_value from the report context.
     NOTE: This function should be called after the proto has been filled.
 
@@ -149,6 +195,9 @@ def _get_widget_ui_value(widget_type, element):
         The type of the widget as stored in proto.
     element : proto
         The proto of the element
+    user_key : str
+        Optional user-specified string to use as the widget ID.
+        If this is None, we'll generate an ID by hashing the element.
 
     Returns
     -------
@@ -158,7 +207,7 @@ def _get_widget_ui_value(widget_type, element):
         doesn't exist, None will be returned.
 
     """
-    _set_widget_id(widget_type, element)
+    _set_widget_id(widget_type, element, user_key)
     el = getattr(element, widget_type)
     ctx = get_report_ctx()
     ui_value = ctx.widgets.get_widget_value(el.id) if ctx else None
@@ -187,8 +236,40 @@ class NoValue(object):
 
 
 class DeltaGenerator(object):
-    """Creator of Delta protobuf messages."""
+    """Creator of Delta protobuf messages.
 
+    Parameters
+    ----------
+    enqueue: callable or None
+      Function that (maybe) enqueues ForwardMsg's and returns True if
+        enqueued or False if not.
+    id: int or None
+      ID for deltas, or None to create the root DeltaGenerator (which
+        produces DeltaGenerators with incrementing IDs)
+    delta_type: string or None
+      The name of the element passed in Element.proto's oneof.
+      This is needed so we can transform dataframes for some elements when
+      performing an `add_rows`.
+    last_index: int or None
+      The last index of the DataFrame for the element this DeltaGenerator
+      created. Only applies to elements that transform dataframes,
+      like line charts.
+    is_root: bool
+      If True, this will behave like a root DeltaGenerator which an
+      auto-incrementing ID (in which case, `id` should be None).
+      If False, this will have a fixed ID as determined
+      by the `id` argument.
+    container: BlockPath
+      The root container for this DeltaGenerator. Can be MAIN or SIDEBAR.
+    path: tuple of ints
+      The full path of this DeltaGenerator, consisting of the IDs of
+      all ancestors. The 0th item is the topmost ancestor.
+
+    """
+
+    # The pydoc below is for user consumption, so it doesn't talk about
+    # DeltaGenerator constructor parameters (which users should never use). For
+    # those, see above.
     def __init__(
         self,
         enqueue,
@@ -199,34 +280,18 @@ class DeltaGenerator(object):
         container=BlockPath_pb2.BlockPath.MAIN,
         path=(),
     ):
-        """Constructor.
+        """Inserts or updates elements in Streamlit apps.
 
-        Parameters
-        ----------
-        enqueue: callable or None
-          Function that (maybe) enqueues ForwardMsg's and returns True if
-            enqueued or False if not.
-        id: int or None
-          ID for deltas, or None to create the root DeltaGenerator (which
-            produces DeltaGenerators with incrementing IDs)
-        delta_type: string or None
-          The name of the element passed in Element.proto's oneof.
-          This is needed so we can transform dataframes for some elements when
-          performing an `add_rows`.
-        last_index: int or None
-          The last index of the DataFrame for the element this DeltaGenerator
-          created. Only applies to elements that transform dataframes,
-          like line charts.
-        is_root: bool
-          If True, this will behave like a root DeltaGenerator which an
-          auto-incrementing ID (in which case, `id` should be None).
-          If False, this will have a fixed ID as determined
-          by the `id` argument.
-        container: BlockPath
-          The root container for this DeltaGenerator. Can be MAIN or SIDEBAR.
-        path: tuple of ints
-          The full path of this DeltaGenerator, consisting of the IDs of
-          all ancestors. The 0th item is the topmost ancestor.
+        As a user, you should never initialize this object by hand. Instead,
+        DeltaGenerator objects are initialized for you in two places:
+
+        1) When you call `dg = st.foo()` for some method "foo", sometimes `dg`
+        is a DeltaGenerator object. You can call methods on the `dg` object to
+        update the element `foo` that appears in the Streamlit app.
+
+        2) This is an internal detail, but `st.sidebar` itself is a
+        DeltaGenerator. That's why you can call `st.sidebar.foo()` to place
+        an element `foo` inside the sidebar.
 
         """
         self._enqueue = enqueue
@@ -423,6 +488,7 @@ class DeltaGenerator(object):
         body : str
             The string to display as Github-flavored Markdown. Syntax
             information can be found at: https://github.github.com/gfm.
+            Inline and block math are supported by KaTeX and remark-math.
 
         unsafe_allow_html : bool
             By default, any HTML tags found in the body will be escaped and
@@ -458,6 +524,30 @@ class DeltaGenerator(object):
         element.text.body = _clean_text(body)
         element.text.format = Text_pb2.Text.MARKDOWN
         element.text.allow_html = unsafe_allow_html
+
+    @_with_element
+    def latex(self, element, body):
+        """Display string formatted as LaTeX.
+
+        Parameters
+        ----------
+        body : str
+            The string to display as LaTeX.
+
+        Example
+        -------
+        >>> st.latex("ax^2 + bx + c = 0")
+
+        """
+        from streamlit.util import is_sympy_expession
+
+        if is_sympy_expession(body):
+            import sympy
+
+            body = sympy.latex(body)
+
+        element.text.body = "$$\n%s\n$$" % _clean_text(body)
+        element.text.format = Text_pb2.Text.MARKDOWN
 
     @_with_element
     def code(self, element, body, language="python"):
@@ -713,21 +803,6 @@ class DeltaGenerator(object):
         import streamlit.elements.exception_proto as exception_proto
 
         exception_proto.marshall(element.exception, exception, exception_traceback)
-
-    @_with_element
-    def _text_exception(self, element, exception_type, message, stack_trace):
-        """Display an exception.
-
-        Parameters
-        ----------
-        exception_type : str
-        message : str
-        stack_trace : list of str
-
-        """
-        element.exception.type = exception_type
-        element.exception.message = message
-        element.exception.stack_trace.extend(stack_trace)
 
     @_remove_self_from_sig
     def dataframe(self, data=None, width=None, height=None):
@@ -1271,7 +1346,8 @@ class DeltaGenerator(object):
             `image[:, :, 2]` is blue. For images coming from libraries like
             OpenCV you should set this to 'BGR', instead.
         format : 'JPEG' or 'PNG'
-            This parameter specifies the image format. Defaults to 'JPEG'.
+            This parameter specifies the image format to use when transferring
+            the image data. Defaults to 'JPEG'.
 
         Example
         -------
@@ -1299,15 +1375,18 @@ class DeltaGenerator(object):
         )
 
     @_with_element
-    def audio(self, element, data, format="audio/wav"):
+    def audio(self, element, data, format="audio/wav", start_time=0):
         """Display an audio player.
 
         Parameters
         ----------
         data : str, bytes, BytesIO, numpy.ndarray, or file opened with
                 io.open().
-            The audio data. Must include headers and any other bytes required
-            in the actual file.
+            Raw audio data or a string with a URL pointing to the file to load.
+            If passing the raw data, this must include headers and any other bytes
+            required in the actual file.
+        start_time: int
+            The time from which this element should start playing.
         format : str
             The mime type for the audio file. Defaults to 'audio/wav'.
             See https://tools.ietf.org/html/rfc4281 for more info.
@@ -1326,24 +1405,27 @@ class DeltaGenerator(object):
         """
         # TODO: Provide API to convert raw NumPy arrays to audio file (with
         # proper headers, etc)?
-        import streamlit.elements.generic_binary_proto as generic_binary_proto
+        from .elements import media_proto
 
-        generic_binary_proto.marshall(element.audio, data)
-        element.audio.format = format
+        media_proto.marshall_audio(element.audio, data, format, start_time)
 
     @_with_element
-    def video(self, element, data, format="video/mp4"):
+    def video(self, element, data, format="video/mp4", start_time=0):
         """Display a video player.
 
         Parameters
         ----------
         data : str, bytes, BytesIO, numpy.ndarray, or file opened with
                 io.open().
-            Must include headers and any other bytes required in the actual
-            file.
+            Raw video data or a string with a URL pointing to the video
+            to load. Includes support for YouTube URLs.
+            If passing the raw data, this must include headers and any other
+            bytes required in the actual file.
         format : str
             The mime type for the video file. Defaults to 'video/mp4'.
             See https://tools.ietf.org/html/rfc4281 for more info.
+        start_time: int
+            The time from which this element should start playing.
 
         Example
         -------
@@ -1359,19 +1441,23 @@ class DeltaGenerator(object):
         """
         # TODO: Provide API to convert raw NumPy arrays to video file (with
         # proper headers, etc)?
-        import streamlit.elements.generic_binary_proto as generic_binary_proto
+        from .elements import media_proto
 
-        generic_binary_proto.marshall(element.video, data)
-        element.video.format = format
+        media_proto.marshall_video(element.video, data, format, start_time)
 
     @_with_element
-    def button(self, element, label):
+    def button(self, element, label, key=None):
         """Display a button widget.
 
         Parameters
         ----------
         label : str
             A short label explaining to the user what this button is for.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1389,12 +1475,12 @@ class DeltaGenerator(object):
         element.button.label = label
         element.button.default = False
 
-        ui_value = _get_widget_ui_value("button", element)
+        ui_value = _get_widget_ui_value("button", element, user_key=key)
         current_value = ui_value if ui_value is not None else False
         return current_value
 
     @_with_element
-    def checkbox(self, element, label, value=False):
+    def checkbox(self, element, label, value=False, key=None):
         """Display a checkbox widget.
 
         Parameters
@@ -1404,6 +1490,11 @@ class DeltaGenerator(object):
         value : bool
             Preselect the checkbox when it first renders. This will be
             cast to bool internally.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1421,12 +1512,14 @@ class DeltaGenerator(object):
         element.checkbox.label = label
         element.checkbox.default = bool(value)
 
-        ui_value = _get_widget_ui_value("checkbox", element)
+        ui_value = _get_widget_ui_value("checkbox", element, user_key=key)
         current_value = ui_value if ui_value is not None else value
         return bool(current_value)
 
     @_with_element
-    def multiselect(self, element, label, options, default=None, format_func=str):
+    def multiselect(
+        self, element, label, options, default=None, format_func=str, key=None
+    ):
         """Display a multiselect widget.
         The multiselect widget starts as empty.
 
@@ -1440,8 +1533,15 @@ class DeltaGenerator(object):
         default: [str] or None
             List of default values.
         format_func : function
-            Function to modify the display of the labels. It receives the option
-            as an argument and its output will be cast to str.
+            Function to modify the display of selectbox options. It receives
+            the raw option as an argument and should output the label to be
+            shown for that option. This has no impact on the return value of
+            the selectbox.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1458,6 +1558,7 @@ class DeltaGenerator(object):
         >>> st.write('You selected:', options)
 
         """
+
         # Perform validation checks and return indices base on the default values.
         def _check_and_convert_to_indices(default_values):
             for value in default_values:
@@ -1482,12 +1583,12 @@ class DeltaGenerator(object):
             str(format_func(option)) for option in options
         ]
 
-        ui_value = _get_widget_ui_value("multiselect", element)
+        ui_value = _get_widget_ui_value("multiselect", element, user_key=key)
         current_value = ui_value.value if ui_value is not None else default_value
         return [options[i] for i in current_value]
 
     @_with_element
-    def radio(self, element, label, options, index=0, format_func=str):
+    def radio(self, element, label, options, index=0, format_func=str, key=None):
         """Display a radio button widget.
 
         Parameters
@@ -1500,8 +1601,15 @@ class DeltaGenerator(object):
         index : int
             The index of the preselected option on first render.
         format_func : function
-            Function to modify the display of the labels. It receives the option
-            as an argument and its output will be cast to str.
+            Function to modify the display of selectbox options. It receives
+            the raw option as an argument and should output the label to be
+            shown for that option. This has no impact on the return value of
+            the selectbox.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1530,12 +1638,12 @@ class DeltaGenerator(object):
         element.radio.default = index
         element.radio.options[:] = [str(format_func(option)) for option in options]
 
-        ui_value = _get_widget_ui_value("radio", element)
+        ui_value = _get_widget_ui_value("radio", element, user_key=key)
         current_value = ui_value if ui_value is not None else index
         return options[current_value] if len(options) > 0 else NoValue
 
     @_with_element
-    def selectbox(self, element, label, options, index=0, format_func=str):
+    def selectbox(self, element, label, options, index=0, format_func=str, key=None):
         """Display a select widget.
 
         Parameters
@@ -1550,6 +1658,11 @@ class DeltaGenerator(object):
         format_func : function
             Function to modify the display of the labels. It receives the option
             as an argument and its output will be cast to str.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1577,7 +1690,7 @@ class DeltaGenerator(object):
         element.selectbox.default = index
         element.selectbox.options[:] = [str(format_func(option)) for option in options]
 
-        ui_value = _get_widget_ui_value("selectbox", element)
+        ui_value = _get_widget_ui_value("selectbox", element, user_key=key)
         current_value = ui_value if ui_value is not None else index
         return options[current_value] if len(options) > 0 else NoValue
 
@@ -1591,6 +1704,7 @@ class DeltaGenerator(object):
         value=None,
         step=None,
         format=None,
+        key=None,
     ):
         """Display a slider widget.
 
@@ -1612,14 +1726,19 @@ class DeltaGenerator(object):
             The stepping interval.
             Defaults to 1 if the value is an int, 0.01 otherwise.
         format : str or None
-            Printf/Python format string.
-
+            Printf/Python format string controlling how the interface should
+            display numbers. This does not impact the return value.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
-        int/float or a tuple of int/float
-            The current value of the slider widget. The return type follows
-            the type of the value argument.
+        int/float or tuple of int/float
+            The current value of the slider widget. The return type will match
+            the data type of the value parameter.
 
         Examples
         --------
@@ -1732,7 +1851,7 @@ class DeltaGenerator(object):
         element.slider.step = step
         element.slider.format = format
 
-        ui_value = _get_widget_ui_value("slider", element)
+        ui_value = _get_widget_ui_value("slider", element, user_key=key)
         # Convert the current value to the appropriate type.
         current_value = ui_value if ui_value is not None else value
         # Cast ui_value to the same type as the input arguments
@@ -1748,7 +1867,7 @@ class DeltaGenerator(object):
         return current_value if single_value else tuple(current_value)
 
     @_with_element
-    def text_input(self, element, label, value=""):
+    def text_input(self, element, label, value="", key=None):
         """Display a single-line text input widget.
 
         Parameters
@@ -1758,6 +1877,11 @@ class DeltaGenerator(object):
         value : any
             The text value of this widget when it first renders. This will be
             cast to str internally.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1773,12 +1897,12 @@ class DeltaGenerator(object):
         element.text_input.label = label
         element.text_input.default = str(value)
 
-        ui_value = _get_widget_ui_value("text_input", element)
+        ui_value = _get_widget_ui_value("text_input", element, user_key=key)
         current_value = ui_value if ui_value is not None else value
         return str(current_value)
 
     @_with_element
-    def text_area(self, element, label, value=""):
+    def text_area(self, element, label, value="", key=None):
         """Display a multi-line text input widget.
 
         Parameters
@@ -1788,6 +1912,11 @@ class DeltaGenerator(object):
         value : any
             The text value of this widget when it first renders. This will be
             cast to str internally.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1809,12 +1938,12 @@ class DeltaGenerator(object):
         element.text_area.label = label
         element.text_area.default = str(value)
 
-        ui_value = _get_widget_ui_value("text_area", element)
+        ui_value = _get_widget_ui_value("text_area", element, user_key=key)
         current_value = ui_value if ui_value is not None else value
         return str(current_value)
 
     @_with_element
-    def time_input(self, element, label, value=None):
+    def time_input(self, element, label, value=None, key=None):
         """Display a time input widget.
 
         Parameters
@@ -1824,6 +1953,11 @@ class DeltaGenerator(object):
         value : datetime.time/datetime.datetime
             The value of this widget when it first renders. This will be
             cast to str internally. Defaults to the current time.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1851,7 +1985,7 @@ class DeltaGenerator(object):
         element.time_input.label = label
         element.time_input.default = time.strftime(value, "%H:%M")
 
-        ui_value = _get_widget_ui_value("time_input", element)
+        ui_value = _get_widget_ui_value("time_input", element, user_key=key)
         current_value = (
             datetime.strptime(ui_value, "%H:%M").time()
             if ui_value is not None
@@ -1860,7 +1994,7 @@ class DeltaGenerator(object):
         return current_value
 
     @_with_element
-    def date_input(self, element, label, value=None):
+    def date_input(self, element, label, value=None, key=None):
         """Display a date input widget.
 
         Parameters
@@ -1870,6 +2004,11 @@ class DeltaGenerator(object):
         value : datetime.date/datetime.datetime
             The value of this widget when it first renders. This will be
             cast to str internally. Defaults to today.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
 
         Returns
         -------
@@ -1899,13 +2038,154 @@ class DeltaGenerator(object):
         element.date_input.label = label
         element.date_input.default = date.strftime(value, "%Y/%m/%d")
 
-        ui_value = _get_widget_ui_value("date_input", element)
+        ui_value = _get_widget_ui_value("date_input", element, user_key=key)
         current_value = (
             datetime.strptime(ui_value, "%Y/%m/%d").date()
             if ui_value is not None
             else value
         )
         return current_value
+
+    @_with_element
+    def number_input(
+        self,
+        element,
+        label,
+        min_value=None,
+        max_value=None,
+        value=NoValue(),
+        step=None,
+        format=None,
+        key=None,
+    ):
+        """Display a numeric input widget.
+
+        Parameters
+        ----------
+        label : str or None
+            A short label explaining to the user what this input is for.
+        min_value : int or float or None
+            The minimum permitted value.
+            If None, there will be no minimum.
+        max_value : int or float or None
+            The maximum permitted value.
+            If None, there will be no maximum.
+        value : int or float or None
+            The value of this widget when it first renders.
+            Defaults to min_value, or 0 if min_value is None
+        step : int or float or None
+            The stepping interval.
+            Defaults to 1 if the value is an int, 0.01 otherwise.
+            If the value is not specified, the format parameter will be used.
+        format : str or None
+            Printf/Python format string controlling how the interface should
+            display numbers. This does not impact the return value.
+        key : str
+            An optional string to use as the unique key for the widget.
+            If this is omitted, a key will be generated for the widget
+            based on its content. Multiple widgets of the same type may
+            not share the same key.
+
+        Returns
+        -------
+        int or float
+            The current value of the numeric input widget. The return type
+            will match the data type of the value parameter.
+
+        Example
+        -------
+        >>> number = st.number_input('Insert a number')
+        >>> st.write('The current number is ', number)
+        """
+
+        if isinstance(value, NoValue):
+            if min_value:
+                value = min_value
+            else:
+                value = 0
+
+        int_value = isinstance(value, int)
+        float_value = isinstance(value, float)
+
+        if value is None:
+            raise ValueError("The value should either be an int/float")
+        else:
+            if format is None:
+                format = "%d" if int_value else "%0.2f"
+
+            if step is None:
+                step = 1 if int_value else 0.01
+
+        # Ensure that all arguments are of the same type.
+        args = [min_value, max_value, step]
+
+        int_args = all(
+            map(lambda a: (isinstance(a, int) or isinstance(a, type(None))), args)
+        )
+        float_args = all(
+            map(lambda a: (isinstance(a, float) or isinstance(a, type(None))), args)
+        )
+
+        if not int_args and not float_args:
+            raise TypeError(
+                "All arguments must be of the same type."
+                "\n`value` has %(value_type)s type."
+                "\n`min_value` has %(min_type)s type."
+                "\n`max_value` has %(max_type)s type."
+                % {
+                    "value_type": type(value).__name__,
+                    "min_type": type(min_value).__name__,
+                    "max_type": type(max_value).__name__,
+                }
+            )
+
+        # Ensure that the value matches arguments' types.
+        all_ints = int_value and int_args
+        all_floats = float_value and float_args
+
+        if not all_ints and not all_floats:
+            raise TypeError(
+                "Both value and arguments must be of the same type."
+                "\n`value` has %(value_type)s type."
+                "\n`min_value` has %(min_type)s type."
+                "\n`max_value` has %(max_type)s type."
+                % {
+                    "value_type": type(value).__name__,
+                    "min_type": type(min_value).__name__,
+                    "max_type": type(max_value).__name__,
+                }
+            )
+
+        if (min_value and min_value > value) or (max_value and max_value < value):
+            raise ValueError(
+                "The default `value` of %(value)s "
+                "must lie between the `min_value` of %(min)s "
+                "and the `max_value` of %(max)s, inclusively."
+                % {"value": value, "min": min_value, "max": max_value}
+            )
+
+        element.number_input.label = label
+        element.number_input.default = value
+
+        if min_value is None:
+            element.number_input.min = float("-inf")
+        else:
+            element.number_input.min = min_value
+
+        if max_value is None:
+            element.number_input.max = float("+inf")
+        else:
+            element.number_input.max = max_value
+
+        if step is not None:
+            element.number_input.step = step
+
+        if format is not None:
+            element.number_input.format = format
+
+        ui_value = _get_widget_ui_value("number_input", element, user_key=key)
+
+        return ui_value if ui_value is not None else value
 
     @_with_element
     def progress(self, element, value):

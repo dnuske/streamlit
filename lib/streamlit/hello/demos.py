@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from __future__ import division, unicode_literals
 
 import urllib
@@ -52,12 +53,13 @@ def intro():
 # fmt: off
 def mapping_demo():
     import pandas as pd
-    import os
 
     @st.cache
     def from_data_file(filename):
-        GITHUB_DATA = "https://raw.githubusercontent.com/streamlit/streamlit/develop/examples/"
-        return pd.read_json(os.path.join(GITHUB_DATA, "data", filename))
+        url = (
+            "https://raw.githubusercontent.com/streamlit/"
+            "streamlit/develop/examples/data/%s" % filename)
+        return pd.read_json(url)
 
     try:
         ALL_LAYERS = {
@@ -220,11 +222,14 @@ def data_frame_demo():
     try:
         df = get_UN_data()
     except urllib.error.URLError as e:
-        st.error("""
+        st.error(
+            """
             **This demo requires internet access.**
 
             Connection error: %s
-        """ % e.reason)
+        """
+            % e.reason
+        )
         return
 
     countries = st.multiselect(

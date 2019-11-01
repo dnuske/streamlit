@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from streamlit import util
 
 # The files in the folders below should always be blacklisted.
@@ -20,12 +21,14 @@ DEFAULT_FOLDER_BLACKLIST = [
     "**/anaconda",
     "**/anaconda2",
     "**/anaconda3",
+    "**/dist-packages",
     "**/miniconda",
     "**/miniconda2",
     "**/miniconda3",
+    "**/pyenv",
+    "**/site-packages",
     "**/venv",
     "**/virtualenv",
-    "**/pyenv",
 ]
 
 

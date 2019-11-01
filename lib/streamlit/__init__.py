@@ -92,6 +92,7 @@ import numpy as _np
 
 from streamlit import code_util as _code_util
 from streamlit import util as _util
+from streamlit import source_util as _source_util
 from streamlit.ReportThread import get_report_ctx, add_report_ctx
 from streamlit.DeltaGenerator import DeltaGenerator as _DeltaGenerator
 
@@ -133,6 +134,7 @@ def _reset(main_dg, sidebar_dg):
     sidebar_dg._reset()
     global sidebar
     sidebar = sidebar_dg
+    get_report_ctx().widget_ids_this_run.clear()
 
 
 # Sidebar
@@ -161,10 +163,12 @@ help = _with_dg(_DeltaGenerator.help)  # noqa: E221
 image = _with_dg(_DeltaGenerator.image)  # noqa: E221
 info = _with_dg(_DeltaGenerator.info)  # noqa: E221
 json = _with_dg(_DeltaGenerator.json)  # noqa: E221
+latex = _with_dg(_DeltaGenerator.latex)  # noqa: E221
 line_chart = _with_dg(_DeltaGenerator.line_chart)  # noqa: E221
 map = _with_dg(_DeltaGenerator.map)  # noqa: E221
 markdown = _with_dg(_DeltaGenerator.markdown)  # noqa: E221
 multiselect = _with_dg(_DeltaGenerator.multiselect)  # noqa: E221
+number_input = _with_dg(_DeltaGenerator.number_input)  # noqa: E221
 plotly_chart = _with_dg(_DeltaGenerator.plotly_chart)  # noqa: E221
 progress = _with_dg(_DeltaGenerator.progress)  # noqa: E221
 pyplot = _with_dg(_DeltaGenerator.pyplot)  # noqa: E221
@@ -182,8 +186,6 @@ title = _with_dg(_DeltaGenerator.title)  # noqa: E221
 vega_lite_chart = _with_dg(_DeltaGenerator.vega_lite_chart)  # noqa: E221
 video = _with_dg(_DeltaGenerator.video)  # noqa: E221
 warning = _with_dg(_DeltaGenerator.warning)  # noqa: E221
-
-_text_exception = _with_dg(_DeltaGenerator._text_exception)  # noqa: E221
 
 # Config
 set_option = _config.set_option
@@ -246,6 +248,7 @@ def write(*args, **kwargs):
             - write(graphviz)   : Displays a Graphviz graph.
             - write(plotly_fig) : Displays a Plotly figure.
             - write(bokeh_fig)  : Displays a Bokeh figure.
+            - write(sympy_expr) : Prints SymPy expression using LaTeX
 
     unsafe_allow_html : bool
         This is a keyword-only argument that defaults to False.
@@ -371,6 +374,9 @@ def write(*args, **kwargs):
             elif _util.is_graphviz_chart(arg):
                 flush_buffer()
                 graphviz_chart(arg)
+            elif _util.is_sympy_expession(arg):
+                flush_buffer()
+                latex(arg)
             elif _util.is_keras_model(arg):
                 from tensorflow.python.keras.utils import vis_utils
 
@@ -538,7 +544,7 @@ def echo():
         else:
             end_line = frame[1]
         lines_to_display = []
-        with open(filename) as source_file:
+        with source_util.open_python_file(filename) as source_file:
             source_lines = source_file.readlines()
             lines_to_display.extend(source_lines[start_line:end_line])
             initial_spaces = _SPACES_RE.match(lines_to_display[0]).end()

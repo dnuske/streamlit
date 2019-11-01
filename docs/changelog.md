@@ -19,9 +19,29 @@ See highlights, bug fixes, and known issues for Streamlit releases:
 
    .. code-block:: bash
 
-      # PIP
       $ pip install --upgrade streamlit
 ```
+
+## Version 0.49.0
+
+_Release date: October 23, 2019_
+
+**Highlights:**
+
+- 💯 New input widget for entering numbers with the keyboard: `st.number_input()`
+- 📺 Audio/video improvements: ability to load from a URL, to embed YouTube
+  videos, and to set the start position.
+- 🤝 You can now (once again) share static snapshots of your apps to S3! See
+  the S3 section of `streamlit config show` to set it up. Then share from
+  top-right menu.
+- ⚙️ Use `server.baseUrlPath` config option to set Streamlit's URL to something
+  like `http://domain.com/customPath`.
+
+**Notable bug fixes:**
+
+- Fixes numerous Windows bugs, including [Issues
+  #339](https://github.com/streamlit/streamlit/issues/399) and
+  [#401](https://github.com/streamlit/streamlit/issues/301).
 
 ## Version 0.48.0
 
@@ -30,7 +50,7 @@ _Release date: October 12, 2019_
 **Highlights:**
 
 - 🔧 Ability to set config options as command line flags or in a local config file.
-- 🗖 You can now maximize charts and images!
+- ↕️ You can now maximize charts and images!
 - ⚡ Streamlit is now much faster when writing data in quick succession to your app.
 - ✳️ Ability to blacklist folder globs from "run on save" and `@st.cache` hashing.
 - 🎛️ Improved handling of widget state when Python file is modified.
@@ -89,7 +109,7 @@ _Release date: August 28, 2019_
 - 😱 Experimental support for _sidebar_! Let us know if you want to be a beta
   tester.
 - 🎁 Completely redesigned `st.cache`! Much more performant, has a cleaner API,
-  support for caching functions called by `@st.cached` functions,
+  support for caching functions called by `@st.cache`d functions,
   user-friendly error messages, and much more!
 - 🖼️ Lightning fast `st.image`, ability to choose between JPEG and PNG
   compression, and between RGB and BGR (for OpenCV).

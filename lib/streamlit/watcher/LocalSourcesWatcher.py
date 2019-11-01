@@ -25,6 +25,7 @@ except ImportError:
     # Python 3
     import importlib
 
+from streamlit import compatibility
 from streamlit import config
 from streamlit import util
 from streamlit.folder_black_list import FolderBlackList
@@ -93,10 +94,21 @@ class LocalSourcesWatcher(object):
             LOGGER.error("Received event for non-watched file", filepath)
             return
 
-        wm = self._watched_modules[filepath]
-
-        if wm.module_name is not None and wm.module_name in sys.modules:
-            del sys.modules[wm.module_name]
+        # Workaround:
+        # Delete all watched modules so we can guarantee changes to the
+        # updated module are reflected on reload.
+        #
+        # In principle, for reloading a given module, we only need to unload
+        # the module itself and all of the modules which import it (directly
+        # or indirectly) such that when we exec the application code, the
+        # changes are reloaded and reflected in the running application.
+        #
+        # However, determining all import paths for a given loaded module is
+        # non-trivial, and so as a workaround we simply unload all watched
+        # modules.
+        for wm in self._watched_modules.values():
+            if wm.module_name is not None and wm.module_name in sys.modules:
+                del sys.modules[wm.module_name]
 
         self._on_file_changed()
 
@@ -107,9 +119,21 @@ class LocalSourcesWatcher(object):
         self._is_closed = True
 
     def _register_watcher(self, filepath, module_name):
-        wm = WatchedModule(
-            watcher=FileWatcher(filepath, self.on_file_changed), module_name=module_name
-        )
+        if compatibility.is_running_py3():
+            ErrorType = PermissionError
+        else:
+            ErrorType = OSError
+
+        try:
+            wm = WatchedModule(
+                watcher=FileWatcher(filepath, self.on_file_changed),
+                module_name=module_name,
+            )
+        except ErrorType:
+            # If you don't have permission to read this file, don't even add it
+            # to watchers.
+            return
+
         self._watched_modules[filepath] = wm
 
     def _deregister_watcher(self, filepath):

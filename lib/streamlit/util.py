@@ -322,6 +322,20 @@ def is_pex():
     return False
 
 
+def is_sympy_expession(obj):
+    """True if input is a SymPy expression."""
+    if not is_type(obj, re.compile(r"^sympy.*$")):
+        return False
+
+    try:
+        import sympy
+
+        if isinstance(obj, sympy.Expr):
+            return True
+    except:
+        return False
+
+
 def is_altair_chart(obj):
     """True if input looks like an Altair chart."""
     return is_type(obj, re.compile(r"^altair\.vegalite\.v\d+\.api\.\w*Chart$"))

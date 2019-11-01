@@ -16,7 +16,6 @@
  */
 
 import React, { PureComponent, ReactNode, Suspense } from "react"
-import { Progress } from "reactstrap"
 import { AutoSizer } from "react-virtualized"
 import { List, Map as ImmutableMap } from "immutable"
 import { dispatchOneOf } from "lib/immutableProto"
@@ -59,12 +58,14 @@ const Button = React.lazy(() => import("components/widgets/Button/"))
 const Checkbox = React.lazy(() => import("components/widgets/Checkbox/"))
 const DateInput = React.lazy(() => import("components/widgets/DateInput/"))
 const Multiselect = React.lazy(() => import("components/widgets/Multiselect/"))
+const Progress = React.lazy(() => import("components/elements/Progress/"))
 const Radio = React.lazy(() => import("components/widgets/Radio/"))
 const Selectbox = React.lazy(() => import("components/widgets/Selectbox/"))
 const Slider = React.lazy(() => import("components/widgets/Slider/"))
 const TextArea = React.lazy(() => import("components/widgets/TextArea/"))
 const TextInput = React.lazy(() => import("components/widgets/TextInput/"))
 const TimeInput = React.lazy(() => import("components/widgets/TimeInput/"))
+const NumberInput = React.lazy(() => import("components/widgets/NumberInput/"))
 
 type SimpleElement = ImmutableMap<string, any>
 type StElement = SimpleElement | BlockElement
@@ -251,13 +252,7 @@ class Block extends PureComponent<Props> {
       plotlyChart: (el: SimpleElement) => (
         <PlotlyChart element={el} width={width} />
       ),
-      progress: (el: SimpleElement) => (
-        <Progress
-          value={el.get("value")}
-          className="stProgress"
-          style={{ width }}
-        />
-      ),
+      progress: (el: SimpleElement) => <Progress element={el} width={width} />,
       table: (el: SimpleElement) => <Table element={el} width={width} />,
       text: (el: SimpleElement) => <Text element={el} width={width} />,
       vegaLiteChart: (el: SimpleElement) => (
@@ -332,10 +327,18 @@ class Block extends PureComponent<Props> {
           {...widgetProps}
         />
       ),
+      numberInput: (el: SimpleElement) => (
+        <NumberInput
+          key={el.get("id")}
+          element={el}
+          width={width}
+          {...widgetProps}
+        />
+      ),
     })
   }
 
-  public render = () => (
+  public render = (): ReactNode => (
     <AutoSizer disableHeight={true}>
       {({ width }) => this.renderElements(width)}
     </AutoSizer>

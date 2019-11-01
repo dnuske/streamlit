@@ -37,6 +37,7 @@ from streamlit.ReportSession import ReportSession
 from streamlit.logger import get_logger
 from streamlit.proto.BackMsg_pb2 import BackMsg
 from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
+from streamlit.server.routes import AddSlashHandler
 from streamlit.server.routes import DebugHandler
 from streamlit.server.routes import HealthHandler
 from streamlit.server.routes import MessageCacheHandler
@@ -45,6 +46,7 @@ from streamlit.server.routes import StaticFileHandler
 from streamlit.server.server_util import MESSAGE_SIZE_LIMIT
 from streamlit.server.server_util import is_cacheable_msg
 from streamlit.server.server_util import is_url_from_allowed_origins
+from streamlit.server.server_util import make_url_path_regex
 from streamlit.server.server_util import serialize_forward_msg
 
 LOGGER = get_logger(__name__)
@@ -227,16 +229,25 @@ class Server(object):
         tornado.web.Application
 
         """
+        base = config.get_option("server.baseUrlPath")
         routes = [
-            (r"/stream", _BrowserWebSocketHandler, dict(server=self)),
             (
-                r"/healthz",
-                HealthHandler,
-                dict(health_check=lambda: self.is_ready_for_browser_connection),
+                make_url_path_regex(base, "stream"),
+                _BrowserWebSocketHandler,
+                dict(server=self),
             ),
-            (r"/debugz", DebugHandler, dict(server=self)),
-            (r"/metrics", MetricsHandler),
-            (r"/message", MessageCacheHandler, dict(cache=self._message_cache)),
+            (
+                make_url_path_regex(base, "healthz"),
+                HealthHandler,
+                dict(callback=lambda: self.is_ready_for_browser_connection),
+            ),
+            (make_url_path_regex(base, "debugz"), DebugHandler, dict(server=self)),
+            (make_url_path_regex(base, "metrics"), MetricsHandler),
+            (
+                make_url_path_regex(base, "message"),
+                MessageCacheHandler,
+                dict(cache=self._message_cache),
+            ),
         ]
 
         if config.get_option("global.developmentMode") and config.get_option(
@@ -250,10 +261,11 @@ class Server(object):
             routes.extend(
                 [
                     (
-                        r"/(.*)",
+                        make_url_path_regex(base, "(.*)"),
                         StaticFileHandler,
                         {"path": "%s/" % static_path, "default_filename": "index.html"},
-                    )
+                    ),
+                    (make_url_path_regex(base, trailing_slash=False), AddSlashHandler),
                 ]
             )
 
