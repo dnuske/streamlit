@@ -32,6 +32,7 @@ import streamlit
 from streamlit.credentials import Credentials
 from streamlit import version
 import streamlit.bootstrap as bootstrap
+from streamlit.case_converters import to_snake_case
 
 LOG_LEVELS = ["error", "warning", "info", "debug"]
 
@@ -60,7 +61,7 @@ def _convert_config_option_to_click_option(config_option):
         description += "\n {} - {}".format(
             config_option.deprecation_text, config_option.deprecation_date
         )
-    envvar = "STREAMLIT_CONFIG_{}".format(param.upper())
+    envvar = "STREAMLIT_CONFIG_{}".format(to_snake_case(param).upper())
 
     return {
         "param": param,
